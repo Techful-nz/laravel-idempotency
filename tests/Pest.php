@@ -1,0 +1,5 @@
+<?php
+
+use Techful\Idempotency\Tests\TestCase;
+
+uses(TestCase::class)->in(__DIR__);
