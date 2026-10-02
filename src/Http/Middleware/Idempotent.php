@@ -33,11 +33,13 @@ class Idempotent
         $inputKey ??= Config::string('idempotency.input');
         $methods = $methods === null ? Config::array('idempotency.methods') : explode('|', $methods);
 
-        if (! in_array($request->getMethod(), array_map(strtoupper(...), $methods), true)) {
+        if (!in_array($request->getMethod(), array_map(strtoupper(...), $methods), true)) {
             return $next($request);
         }
 
-        $idempotencyKey = $request->header(Config::string('idempotency.header')) ?? $request->string($inputKey)->toString();
+        $idempotencyKey = $request->header(Config::string('idempotency.header')) ?? $request
+            ->string($inputKey)
+            ->toString();
 
         if ($idempotencyKey !== '') {
             return $this->replayOrRun($request, $next, $idempotencyKey, $ttl ?? Config::integer('idempotency.ttl'));
@@ -55,16 +57,22 @@ class Idempotent
      */
     protected function replayOrRun(Request $request, Closure $next, string $idempotencyKey, int $ttl): Response
     {
-        $cacheKey = 'idempotent:'.hash('sha256', implode(':', [
-            $request->user()?->getAuthIdentifier() ?? $request->ip(),
-            $request->getMethod(),
-            $request->getUri(),
-        ]));
+        $cacheKey =
+            'idempotent:'
+            . hash('sha256', implode(':', [
+                $request->user()?->getAuthIdentifier() ?? $request->ip(),
+                $request->getMethod(),
+                $request->getUri(),
+            ]));
 
         /** @var array{idempotency_key: string, status: int, headers: array<string, array<int, string>>, content: string, flash?: array<string, mixed>}|null $cached */
         $cached = Cache::get($cacheKey);
 
         if (is_array($cached) && $cached['idempotency_key'] === $idempotencyKey) {
+            if ($request->isJson()) {
+                throw new HttpException(409);
+            }
+
             $this->replayFlash($request, $cached['flash'] ?? []);
 
             return response($cached['content'], $cached['status'], $cached['headers']);
@@ -78,13 +86,17 @@ class Idempotent
             $headers = $response->headers->all();
             unset($headers['set-cookie']);
 
-            Cache::put($cacheKey, [
-                'idempotency_key' => $idempotencyKey,
-                'status' => $response->getStatusCode(),
-                'headers' => $headers,
-                'content' => $response->getContent() ?: '',
-                'flash' => $this->flashedSession($request, $response),
-            ], $ttl);
+            Cache::put(
+                $cacheKey,
+                [
+                    'idempotency_key' => $idempotencyKey,
+                    'status' => $response->getStatusCode(),
+                    'headers' => $headers,
+                    'content' => $response->getContent() ?: '',
+                    'flash' => $this->flashedSession($request, $response),
+                ],
+                $ttl,
+            );
         }
 
         return $response;
@@ -100,7 +112,7 @@ class Idempotent
             return true;
         }
 
-        return $response instanceof RedirectResponse && ! $response->getSession()?->has('errors');
+        return $response instanceof RedirectResponse && !$response->getSession()?->has('errors');
     }
 
     /**
@@ -128,7 +140,7 @@ class Idempotent
      */
     protected function replayFlash(Request $request, array $flash): void
     {
-        if ($flash === [] || ! $request->hasSession()) {
+        if ($flash === [] || !$request->hasSession()) {
             return;
         }
 
